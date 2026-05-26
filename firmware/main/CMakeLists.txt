@@ -1,0 +1,28 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "tasks/sensor_task.c"
+        "tasks/mqtt_task.c"
+        "tasks/inference_task.c"
+        "tasks/web_server_task.c"
+        "tasks/automation_task.c"
+        "tasks/ota_task.c"
+        "tasks/display_task.c"
+        "drivers/pzem004t.c"
+        "drivers/acs712.c"
+        "drivers/dht22.c"
+        "drivers/relay.c"
+        "drivers/ssd1306.c"
+        "ai/inference.c"
+        "ai/features.c"
+        "storage/nvs_store.c"
+        "utils/logger.c"
+        "utils/watchdog.c"
+    INCLUDE_DIRS
+        "."
+        "tasks"
+        "drivers"
+        "ai"
+        "storage"
+        "utils"
+)
