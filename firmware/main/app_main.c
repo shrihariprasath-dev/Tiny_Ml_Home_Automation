@@ -16,6 +16,7 @@
 #include "storage/nvs_store.h"
 #include "utils/logger.h"
 #include "utils/watchdog.h"
+#include "connectivity/connectivity_manager.h"
 
 static const char *TAG = "APP_MAIN";
 
@@ -36,6 +37,13 @@ void app_main(void)
     watchdog_init();
 
     ESP_LOGI(TAG, "Starting Smart Home firmware v%s", CONFIG_APP_PROJECT_VER);
+
+    /*
+     * Layer 3 — bring up WiFi (+ BLE provisioning if needed),
+     * MQTT/TLS, and WebSocket before launching application tasks.
+     * This blocks until the network stack is ready.
+     */
+    ESP_ERROR_CHECK(connectivity_manager_init());
 
     /*
      * Core affinity:

@@ -18,6 +18,11 @@ idf_component_register(
         "storage/nvs_store.c"
         "utils/logger.c"
         "utils/watchdog.c"
+        "connectivity/connectivity_manager.c"
+        "connectivity/wifi_manager.c"
+        "connectivity/ble_provisioner.c"
+        "connectivity/mqtt_manager.c"
+        "connectivity/websocket_client.c"
     INCLUDE_DIRS
         "."
         "tasks"
@@ -25,4 +30,5 @@ idf_component_register(
         "ai"
         "storage"
         "utils"
+        "connectivity"
 )
