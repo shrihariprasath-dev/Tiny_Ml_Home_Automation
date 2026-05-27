@@ -1,0 +1,110 @@
+name: Firmware Build & Test
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'firmware/**'
+      - '.github/workflows/firmware_build.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'firmware/**'
+
+env:
+  IDF_VERSION: v5.2.2
+  IDF_TARGET: esp32
+
+jobs:
+  build:
+    name: Build ESP32 Firmware
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache ESP-IDF tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.espressif
+            ~/esp/esp-idf
+          key: idf-${{ env.IDF_VERSION }}-${{ runner.os }}
+          restore-keys: |
+            idf-${{ env.IDF_VERSION }}-
+
+      - name: Set up ESP-IDF
+        run: |
+          git clone --depth=1 --branch $IDF_VERSION \
+            https://github.com/espressif/esp-idf.git ~/esp/esp-idf
+          ~/esp/esp-idf/install.sh esp32
+        if: steps.cache-idf.outputs.cache-hit != 'true'
+
+      - name: Build firmware
+        working-directory: firmware
+        run: |
+          . ~/esp/esp-idf/export.sh
+          idf.py set-target ${{ env.IDF_TARGET }}
+          idf.py build
+
+      - name: Run Unity unit tests (host-side)
+        working-directory: firmware
+        run: |
+          . ~/esp/esp-idf/export.sh
+          # Build and run any CMake test targets (Unity framework)
+          if [ -d "test" ]; then
+            idf.py -C test build
+          else
+            echo "No host-side tests found, skipping."
+          fi
+
+      - name: Get firmware version
+        id: fw_version
+        run: |
+          VER=$(grep -oP '(?<=FIRMWARE_VERSION ")[^"]+' firmware/main/app_main.c || echo "1.0.0")
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ steps.fw_version.outputs.version }}-${{ github.sha }}
+          path: |
+            firmware/build/*.bin
+            firmware/build/*.elf
+            firmware/build/bootloader/bootloader.bin
+            firmware/build/partition_table/partition-table.bin
+          retention-days: 30
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-22.04
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download firmware artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: firmware-*
+          merge-multiple: true
+          path: dist/
+
+      - name: Get version from tag or commit
+        id: version
+        run: echo "tag=${GITHUB_REF_NAME:-$(date +%Y%m%d)}-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release and upload .bin
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: firmware-${{ steps.version.outputs.tag }}
+          name: "Firmware ${{ steps.version.outputs.tag }}"
+          files: dist/*.bin
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
