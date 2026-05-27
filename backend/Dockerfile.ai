@@ -1,0 +1,29 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+# Install tflite_runtime instead of full TensorFlow to keep the image small
+RUN pip install --no-cache-dir \
+    fastapi==0.111.0 \
+    uvicorn[standard] \
+    numpy \
+    influxdb-client[async]==1.43.0 \
+    prometheus-fastapi-instrumentator \
+    pydantic==2.7.1 \
+    tflite-runtime || \
+  pip install --no-cache-dir tensorflow-cpu==2.16.1
+
+COPY app/ ./app/
+# Models are mounted via Docker volume at runtime (ml/models → /app/ml/models)
+RUN mkdir -p ml/models
+
+ENV PYTHONPATH=/app
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 8001
+CMD ["uvicorn", "app.ai_main:app", "--host", "0.0.0.0", "--port", "8001"]
