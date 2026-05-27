@@ -1,0 +1,52 @@
+version: "3.9"
+
+# Production overrides — apply with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+
+  api:
+    image: ghcr.io/shrihariprasath-dev/smarthome-api:latest
+    environment:
+      - DEBUG=false
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+
+  ai_service:
+    image: ghcr.io/shrihariprasath-dev/smarthome-api:latest
+
+  celery:
+    image: ghcr.io/shrihariprasath-dev/smarthome-api:latest
+    deploy:
+      replicas: 2
+
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}   # must be set in prod .env
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  influxdb:
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  redis:
+    command: >
+      redis-server
+      --save 300 1
+      --requirepass ${REDIS_PASSWORD}
+      --loglevel warning
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+
+  nginx:
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/nginx/certs:ro
