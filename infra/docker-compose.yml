@@ -1,0 +1,208 @@
+version: "3.9"
+
+networks:
+  smarthome_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  influxdb_data:
+  redis_data:
+  grafana_data:
+  mosquitto_data:
+  mosquitto_log:
+  firmware_bins:
+
+services:
+
+  # ── FastAPI — Main API (port 8000) ─────────────────────────────────────
+  api:
+    build: ../backend
+    container_name: smarthome_api
+    restart: unless-stopped
+    environment:
+      - POSTGRES_URL=postgresql+asyncpg://smarthome:smarthome@postgres:5432/smarthome
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_TOKEN=${INFLUX_TOKEN:-smarthome-token}
+      - INFLUX_ORG=smarthome
+      - INFLUX_BUCKET=energy_telemetry
+      - REDIS_URL=redis://redis:6379/0
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=8883
+      - MQTT_TLS=true
+      - MQTT_CA_CERT=/certs/ca.crt
+      - MQTT_USERNAME=backend
+      - MQTT_PASSWORD=${MQTT_BACKEND_PASSWORD:-backend_secret}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
+      - AI_SERVICE_URL=http://ai_service:8001
+    volumes:
+      - firmware_bins:/firmware
+      - ./certs:/certs:ro
+    depends_on:
+      - postgres
+      - influxdb
+      - redis
+      - mosquitto
+    networks:
+      - smarthome_net
+    expose:
+      - "8000"
+
+  # ── FastAPI — AI Inference Service (port 8001) ─────────────────────────
+  ai_service:
+    build: ../backend
+    container_name: smarthome_ai
+    restart: unless-stopped
+    command: uvicorn app.ai_main:app --host 0.0.0.0 --port 8001
+    environment:
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_TOKEN=${INFLUX_TOKEN:-smarthome-token}
+      - INFLUX_ORG=smarthome
+    depends_on:
+      - influxdb
+    networks:
+      - smarthome_net
+    expose:
+      - "8001"
+
+  # ── Celery Worker ─────────────────────────────────────────────────────
+  celery:
+    build: ../backend
+    container_name: smarthome_celery
+    restart: unless-stopped
+    command: celery -A app.services.alert_engine.celery_app worker --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - AI_SERVICE_URL=http://ai_service:8001
+      - POSTGRES_URL=postgresql+asyncpg://smarthome:smarthome@postgres:5432/smarthome
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - smarthome_net
+
+  # ── Celery Beat (scheduler) ────────────────────────────────────────────
+  celery_beat:
+    build: ../backend
+    container_name: smarthome_celery_beat
+    restart: unless-stopped
+    command: celery -A app.services.alert_engine.celery_app beat --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    networks:
+      - smarthome_net
+
+  # ── Eclipse Mosquitto MQTT Broker ─────────────────────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: smarthome_mosquitto
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/acl.conf:/mosquitto/config/acl.conf:ro
+      - ./certs:/mosquitto/certs:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    ports:
+      - "1883:1883"     # Plain MQTT (LAN only — block at firewall in production)
+      - "8883:8883"     # MQTT over TLS
+    networks:
+      - smarthome_net
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: smarthome_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: smarthome
+      POSTGRES_USER: smarthome
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smarthome}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - smarthome_net
+    expose:
+      - "5432"
+
+  # ── InfluxDB 2.7 ─────────────────────────────────────────────────────
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: smarthome_influxdb
+    restart: unless-stopped
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_PASSWORD:-smarthome123}
+      DOCKER_INFLUXDB_INIT_ORG: smarthome
+      DOCKER_INFLUXDB_INIT_BUCKET: energy_telemetry
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:-smarthome-token}
+      DOCKER_INFLUXDB_INIT_RETENTION: 720h   # 30 days raw
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    networks:
+      - smarthome_net
+    expose:
+      - "8086"
+
+  # ── Redis ─────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: smarthome_redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    networks:
+      - smarthome_net
+    expose:
+      - "6379"
+
+  # ── Nginx Reverse Proxy ───────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: smarthome_nginx
+    restart: unless-stopped
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - api
+    networks:
+      - smarthome_net
+
+  # ── Prometheus ────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: smarthome_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - smarthome_net
+    expose:
+      - "9090"
+
+  # ── Grafana ───────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: smarthome_grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    depends_on:
+      - prometheus
+      - influxdb
+    networks:
+      - smarthome_net
+    expose:
+      - "3000"
