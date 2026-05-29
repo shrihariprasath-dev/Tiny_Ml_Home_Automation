@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from app.core.config import get_settings
 from app.core.database import create_tables, close_influx_client
-from app.routers import auth, devices, energy, alerts, ai
+from app.routers import auth, devices, energy, alerts, ai, ota
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -65,24 +65,7 @@ app.include_router(devices.router)
 app.include_router(energy.router)
 app.include_router(alerts.router)
 app.include_router(ai.router)
-
-
-# ── OTA endpoint ─────────────────────────────────────────────────────────────
-
-@app.get("/ota/version")
-async def ota_version():
-    """Polled by ESP32 ota_task every hour to check for firmware updates."""
-    import os, glob
-    pattern = os.path.join(settings.ota_firmware_path, "*.bin")
-    bins = sorted(glob.glob(pattern))
-    if not bins:
-        return {"version": "0.0.0", "url": ""}
-    latest = bins[-1]
-    version = os.path.basename(latest).replace("firmware_", "").replace(".bin", "")
-    return {
-        "version": version,
-        "url": f"/ota/firmware/{os.path.basename(latest)}",
-    }
+app.include_router(ota.router)
 
 
 @app.get("/health")
